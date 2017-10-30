@@ -5,10 +5,14 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.media.MediaMetadata;
+import android.media.session.MediaController;
 import android.media.session.PlaybackState;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.v17.leanback.widget.Action;
 import android.support.v17.leanback.widget.ArrayObjectAdapter;
 import android.support.v17.leanback.widget.ClassPresenterSelector;
@@ -43,6 +47,7 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
     private static Context sContext;
 
     private Movie mSelectedMovie;
+    private PlaybackController mPlaybackController;
     private PlaybackControlsRow mPlaybackControlsRow;
     private ArrayObjectAdapter mPrimaryActionAdapter;
     private ArrayObjectAdapter mSecondaryActionAdapter;
@@ -68,6 +73,9 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
     private int mCurrentItem;
     private PicassoPlaybackControlsRowTarget mPlaybackControlsRowTarget;
 
+    private MediaController mMediaController;
+    private MediaController.Callback mMediaControllerCallback = new MediaControllerCallback();
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         Log.i(TAG, "onCreate");
@@ -84,6 +92,25 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
         mCurrentItem = (int) mSelectedMovie.getId() - 1;
 
         setUpRows();
+    }
+
+    @Override
+    public void onAttach(Context context) {
+        super.onAttach(context);
+        mMediaController = getActivity().getMediaController();
+        if (mMediaController == null) {
+            Log.e(TAG, "mMediaController is null");
+        }
+        mMediaController.registerCallback(mMediaControllerCallback);
+    }
+
+    @Override
+    public void onDetach() {
+        if (mMediaController != null) {
+            Log.d(TAG, "unregister callback of mediaController");
+            mMediaController.unregisterCallback(mMediaControllerCallback);
+        }
+        super.onDetach();
     }
 
     private void setUpRows() {
@@ -106,16 +133,22 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
             @Override
             public void onActionClicked(Action action) {
                 if (action.getId() == mPlayPauseAction.getId()) {
-                    togglePlayback(mPlayPauseAction.getIndex() == PlaybackControlsRow.PlayPauseAction.PLAY);
+                    if (mPlayPauseAction.getIndex() == PlaybackControlsRow.PlayPauseAction.PLAY) {
+                        mMediaController.getTransportControls().play();
+                    } else if (mPlayPauseAction.getIndex() == PlaybackControlsRow.PlayPauseAction.PAUSE) {
+                        mMediaController.getTransportControls().pause();
+                    }
                 } else if (action.getId() == mSkipNextAction.getId()) {
-                    next(mCurrentPlaybackState == PlaybackState.STATE_PLAYING);
+                    mMediaController.getTransportControls().skipToNext();
                 } else if (action.getId() == mSkipPreviousAction.getId()) {
-                    prev(mCurrentPlaybackState == PlaybackState.STATE_PLAYING);
+                    mMediaController.getTransportControls().skipToPrevious();
                 } else if (action.getId() == mFastForwardAction.getId()) {
-                    fastForward();
+                    mMediaController.getTransportControls().fastForward();
                 } else if (action.getId() == mRewindAction.getId()) {
-                    rewind();
+                    mMediaController.getTransportControls().rewind();
+
                 }
+
                 if (action instanceof PlaybackControlsRow.MultiAction) {
                     /* Following action is subclass of MultiAction
                      * - PlayPauseAction
@@ -171,6 +204,10 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
             ((PlaybackOverlayActivity) getActivity()).playPause(autoPlay);
 
         }
+
+        /*ui part*/;
+        playbackStateChanged();
+        updatePlaybackRow(mCurrentItem);
     }
 
     private void next(boolean autoPlay) {
@@ -277,11 +314,13 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
                     int totalTime = mPlaybackControlsRow.getTotalTime();
                     mPlaybackControlsRow.setCurrentTime(currentTime);
                     mPlaybackControlsRow.setBufferedProgress(currentTime + SIMULATED_BUFFERED_TIME);
-                    if (totalTime > 0 && totalTime <= currentTime) {
-                        stopProgressAutomation();
+                    if (totalTime > 0 && totalTime <= currentTime + updatePeriod) {
+//                        stopProgressAutomation();
+                        mMediaController.getTransportControls().skipToNext();
                     } else {
-                        mHandler.postDelayed(this, updatePeriod);
+//                        mHandler.postDelayed(this, updatePeriod);
                     }
+                    mHandler.postDelayed(this, updatePeriod);
                 }
             };
             mHandler.postDelayed(mRunnable, getUpdatePeriod());
@@ -380,6 +419,63 @@ public class PlaybackOverlayFragment extends android.support.v17.leanback.app.Pl
         @Override
         public void onPrepareLoad(Drawable placeHolderDrawable) {
 
+        }
+    }
+
+    private class MediaControllerCallback extends MediaController.Callback {
+        @Override
+        public void onPlaybackStateChanged(@NonNull final PlaybackState state) {
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (state.getState() == PlaybackState.STATE_PLAYING) {
+                        mPlaybackController.setCurrentPlaybackState(PlaybackState.STATE_PLAYING);
+                        startProgressAutomation();
+                        mPlayPauseAction.setIndex(PlaybackControlsRow.PlayPauseAction.PAUSE);
+                        mPlayPauseAction.setIcon(mPlayPauseAction.getDrawable(PlaybackControlsRow.PlayPauseAction.PAUSE));
+                        notifyChanged(mPlayPauseAction);
+                    } else if (state.getState() == PlaybackState.STATE_PAUSED) {
+                        mPlaybackController.setCurrentPlaybackState(PlaybackState.STATE_PAUSED);
+                        mPlayPauseAction.setIndex(PlaybackControlsRow.PlayPauseAction.PLAY);
+                        mPlayPauseAction.setIcon(mPlayPauseAction.getDrawable(PlaybackControlsRow.PlayPauseAction.PLAY));
+                        notifyChanged(mPlayPauseAction);
+                    }
+                    int currentTime = ((int) state.getPosition());
+                    mPlaybackControlsRow.setCurrentTime(currentTime);
+                    mPlaybackControlsRow.setBufferedProgress(mPlaybackController.calcBufferedTime(currentTime));
+                }
+            });
+        }
+
+        @Override
+        public void onMetadataChanged(@Nullable MediaMetadata metadata) {
+            updateMovieView(
+                    metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE),
+                    metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE),
+                    metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI),
+                    metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
+            );
+
+        }
+
+        private void updateMovieView(String title, String studio, String cardImageUrl, long duration) {
+            if (mPlaybackControlsRow.getItem() != null) {
+                Movie movie = ((Movie) mPlaybackControlsRow.getItem());
+                movie.setTitle(title);
+                movie.setStudio(studio);
+            } else {
+                Log.e(TAG, "mPlaybackControlsRow.getItem() is null");
+            }
+            mPlaybackControlsRow.setTotalTime(((int) duration));
+            mPlaybackControlsRow.setCurrentTime(0);
+            mPlaybackControlsRow.setBufferedProgress(0);
+            mRowsAdapter.notifyArrayItemRangeChanged(0, mRowsAdapter.size());
+
+            if (SHOW_IMAGE) {
+                mPlaybackControlsRowTarget = new PicassoPlaybackControlsRowTarget(mPlaybackControlsRow);
+                updateVideoImage(URI.create(cardImageUrl));
+
+            }
         }
     }
 }

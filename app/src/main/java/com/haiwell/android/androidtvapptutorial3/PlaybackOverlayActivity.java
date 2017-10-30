@@ -3,15 +3,20 @@ package com.haiwell.android.androidtvapptutorial3;
 import android.app.Activity;
 import android.media.MediaPlayer;
 import android.os.Bundle;
+import android.support.v17.leanback.widget.PlaybackControlsRow;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.VideoView;
 
+import java.util.ArrayList;
+
 public class PlaybackOverlayActivity extends Activity {
     private static final String TAG = PlaybackOverlayFragment.class.getSimpleName();
 
     private VideoView mVideoView;
+    private ArrayList<Movie> mItems = new ArrayList<Movie>();
+    private PlaybackController mPlaybackController;
 
     private LeanbackPlayBackState mPlayBackState = LeanbackPlayBackState.IDLE;
 
@@ -85,6 +90,14 @@ public class PlaybackOverlayActivity extends Activity {
         setContentView(R.layout.activity_playback_overlay);
 
         loadViews();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (!requestVisibleBehind(true)) {
+            mPlaybackController.playPause(false);
+        }
     }
 
     @Override
